@@ -30,9 +30,9 @@ service.interceptors.response.use(
 )
 
 export function get<T = any>(url: string, config?: AxiosRequestConfig): Promise<T> {
-    return service.get(url, config)
+    return service.get(url, config) as Promise<T>
 }
 
 export function post<T = any>(url: string, data?: any, config?: AxiosRequestConfig): Promise<T> {
-    return service.post(url, data, config)
+    return service.post(url, data, config) as Promise<T>
 }
