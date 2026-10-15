@@ -1,0 +1,10 @@
+.dockerignore
+.git
+.github
+.idea
+.vscode
+node_modules
+dist
+*.md
+Dockerfile
+deploy/docker-compose.yml
