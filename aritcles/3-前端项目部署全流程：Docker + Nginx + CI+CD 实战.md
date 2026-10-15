@@ -282,11 +282,12 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Login to Docker Hub
+      - name: Login to GHCR
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -294,8 +295,8 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ secrets.DOCKER_USERNAME }}/frontend-starter:latest
-            ${{ secrets.DOCKER_USERNAME }}/frontend-starter:${{ github.sha }}
+            ghcr.io/${{ github.repository_owner }}/frontend-starter:latest
+            ghcr.io/${{ github.repository_owner }}/frontend-starter:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 ```
@@ -303,9 +304,12 @@ jobs:
 流水线分两个 Job：
 
 1. **lint-and-build**：每次 push 和 PR 都跑，lint 不通过则阻断合并。
-2. **docker-build-and-push**：仅在 main 分支推送时触发，构建 Docker 镜像并推送到 Docker Hub。
+2. **docker-build-and-push**：仅在 main 分支推送时触发，构建 Docker 镜像并推送到 GHCR（GitHub Container Registry）。
 
-> **踩坑提示：** 敏感信息（Docker Hub 账号密码）必须放在 GitHub Secrets 里，绝不能硬编码在 workflow 文件中。在仓库 Settings → Secrets and variables → Actions 中添加 `DOCKER_USERNAME` 和 `DOCKER_PASSWORD`。
+> **为什么用 GHCR 而不是 Docker Hub？**
+> - **无需额外 Secret**：`GITHUB_TOKEN` 由 GitHub Actions 自动提供，不用管理 Docker Hub 账号密码
+> - **更稳定**：Docker Hub 免费版有拉取频率限制，GHCR 对 GitHub Actions 无此限制
+> - **权限集成**：镜像访问权限直接跟仓库权限走，私有仓库的镜像默认也是私有的
 
 ### 3.2 镜像版本策略
 
@@ -313,6 +317,8 @@ jobs:
 
 - **`latest`**：始终指向最新构建，方便快速部署。
 - **`${{ github.sha }}`**：用 Git commit hash 做版本标识，出问题时可以精确回滚到任意一次提交对应的镜像。
+
+镜像地址格式为 `ghcr.io/OWNER/frontend-starter:TAG`，例如 `ghcr.io/chendapeng/frontend-starter:abc1234`。
 
 ### 3.3 构建缓存加速
 
@@ -412,7 +418,7 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: your-dockerhub/frontend-starter:${{ github.sha }}
+          image: ghcr.io/YOUR_USERNAME/frontend-starter:${{ github.sha }}
           ports:
             - containerPort: 80
 ```
@@ -471,8 +477,8 @@ onCLS(console.log);  // 累积布局偏移
 
 ```bash
 # 回滚到上一个版本
-docker pull your-dockerhub/frontend-starter:abc1234
-docker tag your-dockerhub/frontend-starter:abc1234 your-dockerhub/frontend-starter:latest
+docker pull ghcr.io/YOUR_USERNAME/frontend-starter:abc1234
+docker tag ghcr.io/YOUR_USERNAME/frontend-starter:abc1234 ghcr.io/YOUR_USERNAME/frontend-starter:latest
 docker compose up -d
 ```
 
@@ -486,7 +492,7 @@ docker compose up -d
 
 - 用 Docker 多阶段构建把镜像体积从 1GB+ 压到 30MB
 - 用 Nginx 配置 SPA 路由兜底、静态资源缓存、gzip 压缩
-- 用 GitHub Actions 实现推送即构建、lint 质量门禁、镜像自动推送
+- 用 GitHub Actions 实现推送即构建、lint 质量门禁、镜像自动推送到 GHCR
 - 用 Docker Compose 一键起服务，生产可平滑迁移到 K8s
 - 用 Sentry + Web Vitals 采集线上异常与真实性能指标
 - 用 commit hash tag 实现秒级回滚
