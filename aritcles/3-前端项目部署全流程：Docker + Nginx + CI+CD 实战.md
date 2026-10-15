@@ -4,7 +4,7 @@
 
 ## 前言
 
-在第 2 篇 [从零搭建 Vue 3 工程化项目](https://mp.weixin.qq.com/s/xxxxx) 中，我们完成了从项目初始化、路由搭建、状态管理到请求封装的完整工程骨架，最终通过 `pnpm build` 产出了 `dist/` 目录下的静态文件。
+在第 2 篇 [从零搭建 Vue 3 工程化项目](https://mp.weixin.qq.com/s/mGQJZyNRbOkkuQFFtMmbiw) 中，我们完成了从项目初始化、路由搭建、状态管理到请求封装的完整工程骨架，最终通过 `pnpm build` 产出了 `dist/` 目录下的静态文件。
 
 但 `dist/` 躺在本地磁盘上并不能服务用户。怎么把它安全、稳定、可重复地部署到线上，才是从「能开发」到「能上线」的最后一公里。
 
@@ -20,52 +20,15 @@
 
 读完你应该能独立把一份 Vue 3 构建产物推到线上，并具备回滚与监控能力。
 
+![image-20261015112651986](D:\a-github-project\everything\技术博文\前端杂项\3-前端项目部署全流程：Docker + Nginx + CI+CD 实战.assets\image-20261015112651986.png)
 
 
-## 部署全流程思维导图
-
-![image-20261014230000001](D:\a-github-project\everything\技术博文\前端杂项\3-前端项目部署全流程.assets\image-20261014230000001.png)
-
-> 思维导图结构（供绘制参考）：
->
-> ```
-> 前端项目部署全流程
-> ├── 一、Docker 多阶段构建
-> │   ├── 构建阶段（node 镜像）
-> │   │   ├── pnpm install --frozen-lockfile
-> │   │   └── pnpm build → dist/
-> │   └── 运行阶段（nginx 镜像）
-> │       ├── COPY dist → /usr/share/nginx/html
-> │       └── 自定义 nginx.conf
-> ├── 二、Nginx 核心配置
-> │   ├── SPA 路由兜底（try_files）
-> │   ├── 静态资源长期缓存（带 hash 文件名）
-> │   ├── 接口反向代理（/api → backend）
-> │   └── gzip 压缩
-> ├── 三、CI/CD 流水线
-> │   ├── GitHub Actions 触发条件
-> │   ├── lint + build 质量门禁
-> │   ├── Docker 镜像构建与推送
-> │   └── Secrets 管理（DOCKER_USERNAME/PASSWORD）
-> ├── 四、环境管理
-> │   ├── .env.development / .env.production
-> │   └── Vite base 路径配置
-> ├── 五、本地与生产部署
-> │   ├── Docker Compose 一键起服务
-> │   └── 生产环境部署策略
-> └── 六、监控与回滚
->     ├── Sentry 异常采集
->     ├── Web Vitals 性能监控
->     └── 镜像版本回滚
-> ```
-
-
-
----
 
 ## 一、Docker 多阶段构建
 
-单阶段 Dockerfile 会把 Node.js 运行时、node_modules 和构建工具全部打进最终镜像，体积动辄 1GB+。多阶段构建只在最终镜像里保留 Nginx 和 `dist/` 产物，通常能压到 30MB 以内。
+单阶段 Dockerfile 会把 Node.js 运行时、node_modules 和构建工具全部打进最终镜像，体积动辄 1GB+。
+
+多阶段构建只在最终镜像里保留 Nginx 和 `dist/` 产物，通常能压到 30MB 以内。
 
 ### 1.1 构建阶段（Builder）
 
@@ -118,8 +81,10 @@ dist
 .vscode
 *.md
 Dockerfile
-deploy/
+deploy/docker-compose.yml
 ```
+
+> **踩坑提示：** `.dockerignore` 里不能写 `deploy/`，否则 `deploy/nginx.conf` 也会被排除，Dockerfile 第二阶段的 `COPY deploy/nginx.conf` 会报 file not found。只排除 `deploy/docker-compose.yml` 即可，它只是编排文件，不需要打进镜像。
 
 ### 1.4 完整 Dockerfile
 
@@ -153,10 +118,6 @@ docker build -t frontend-starter .
 docker run -d -p 8080:80 --name frontend frontend-starter
 # 浏览器打开 http://localhost:8080
 ```
-
-
-
----
 
 ## 二、Nginx 核心配置
 
@@ -195,7 +156,9 @@ location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
 
 ```nginx
 location /api/ {
-    proxy_pass http://backend:3000/;
+    resolver 127.0.0.11 valid=30s;
+    set $backend_url http://backend:3000;
+    proxy_pass $backend_url;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -204,6 +167,8 @@ location /api/ {
 ```
 
 这样前端代码里 `VITE_API_BASE_URL` 仍然写 `/api`，开发环境和生产环境保持一致。
+
+> **踩坑提示：** 如果直接写 `proxy_pass http://backend:3000/;`，nginx 启动时会立即解析 `backend` 主机名。单独 `docker run` 时没有这个主机，容器会启动失败。使用 `resolver` + 变量可以让 nginx 延迟解析，启动时不报错，请求时才去 DNS 查询。
 
 ### 2.4 gzip 压缩
 
@@ -242,7 +207,9 @@ server {
 
     # 接口反向代理
     location /api/ {
-        proxy_pass http://backend:3000/;
+        resolver 127.0.0.11 valid=30s;
+        set $backend_url http://backend:3000;
+        proxy_pass $backend_url;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -257,10 +224,6 @@ server {
                  text/xml application/xml text/javascript image/svg+xml;
 }
 ```
-
-
-
----
 
 ## 三、CI/CD 流水线
 
@@ -361,9 +324,6 @@ cache-to: type=gha,mode=max
 GitHub Actions 原生支持构建缓存（`type=gha`），后续构建可以复用之前的中间层，Docker 构建时间通常能从 3-5 分钟降到 30 秒以内。
 
 
-
----
-
 ## 四、环境管理
 
 ### 4.1 多环境变量
@@ -403,8 +363,6 @@ const router = createRouter({
 > **建议：** 把 `base` 也抽到环境变量里（`VITE_BASE_PATH`），这样同一份代码可以通过不同环境变量部署到不同子路径。
 
 
-
----
 
 ## 五、本地与生产部署
 
@@ -462,8 +420,6 @@ spec:
 滚动更新保证部署过程中始终有可用实例，用户无感知。
 
 
-
----
 
 ## 六、监控与回滚
 
@@ -524,11 +480,7 @@ docker compose up -d
 
 > **最佳实践：** 生产环境不要用 `latest` tag 部署，而是用具体的 commit hash 或语义化版本号。`latest` 只作为开发环境的快捷方式。这样回滚时只需要改 tag 名，不需要重新构建。
 
-
-
----
-
-## 本篇小结
+## 小结
 
 到这里，从代码提交到线上运行的完整链路已经打通：
 
@@ -539,4 +491,4 @@ docker compose up -d
 - 用 Sentry + Web Vitals 采集线上异常与真实性能指标
 - 用 commit hash tag 实现秒级回滚
 
-第 2 篇解决了「能不能持续开发」，本篇解决了「能不能稳定上线」。但线上跑起来之后，用户量上来、接口变多、首屏变慢怎么办？第 4 篇《前端性能优化与监控实战》会深入 LCP / INP / CLS 的优化手段、代码分割策略、以及如何让监控数据真正驱动性能改进。
+但线上跑起来之后，用户量上来、接口变多、首屏变慢怎么办？接下来我将从 **性能优化** 与 **监控** 入手，深入 LCP / INP / CLS 的优化手段、代码分割策略、以及如何让监控数据真正驱动性能改进。
